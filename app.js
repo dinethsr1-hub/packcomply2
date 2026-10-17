@@ -1,24 +1,36 @@
 require("dotenv").config();
+
 const express = require("express");
 const multer = require("multer");
 const OpenAI = require("openai");
 const path = require("path");
 
 const app = express();
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 8 * 1024 * 1024 }
 });
 
 app.use(express.json());
-app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
-app.use(express.static(path.join(__dirname, "public")));
+
+// index.html is in the ROOT folder
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "index.html"));
+});
+
+// Static files from root
+app.use(express.static(__dirname));
 
 const RULES = require("./rules.json");
-const client = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
+
+const client = process.env.OPENAI_API_KEY
+  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  : null;
 
 function matches(rule, x) {
   const t = rule.trigger || {};
+
   if (t.all) return true;
   if (t.country && t.country !== x.country) return false;
   if (t.product && t.product !== x.product) return false;
@@ -26,28 +38,51 @@ function matches(rule, x) {
   if (t.b2c && t.b2c !== x.b2c) return false;
   if (t.foreign_direct && t.foreign_direct !== x.foreign_direct) return false;
   if (t.material && !t.material.includes(x.material)) return false;
+
   return true;
 }
 
 app.post("/api/check", (req, res) => {
   const x = req.body || {};
+
   const matched = RULES.filter(r => matches(r, x));
-  const evidence = [...new Set(matched.flatMap(r => r.evidence || []))];
+
+  const evidence = [
+    ...new Set(matched.flatMap(r => r.evidence || []))
+  ];
 
   const issues = [];
-  if (!x.product || !x.country || !x.material) issues.push("Complete the product, destination and packaging fields.");
-  if (x.food_contact === "yes") {
-    issues.push("Food-contact suitability should be supported by supplier documentation and intended-use information.");
-  }
-  if (x.material === "plastic" || x.material === "composite") {
-    issues.push("Exact polymer/layer structure cannot be established from appearance alone.");
-  }
-  if (x.mass === "unknown") issues.push("Packaging mass is missing; obtain the packaging weight in kg.");
-  if (x.b2c === "yes" && x.country === "Germany") {
-    issues.push("Check German packaging EPR/LUCID obligations for the actual producer role and packaging classification.");
+
+  if (!x.product || !x.country || !x.material) {
+    issues.push("Complete the product, destination and packaging fields.");
   }
 
-  const status = issues.length ? "CHECK REQUIRED" : "PRELIMINARY REVIEW";
+  if (x.food_contact === "yes") {
+    issues.push(
+      "Food-contact suitability should be supported by supplier documentation and intended-use information."
+    );
+  }
+
+  if (x.material === "plastic" || x.material === "composite") {
+    issues.push(
+      "Exact polymer/layer structure cannot be established from appearance alone."
+    );
+  }
+
+  if (x.mass === "unknown") {
+    issues.push("Packaging mass is missing; obtain the packaging weight in kg.");
+  }
+
+  if (x.b2c === "yes" && x.country === "Germany") {
+    issues.push(
+      "Check German packaging EPR/LUCID obligations for the actual producer role and packaging classification."
+    );
+  }
+
+  const status = issues.length
+    ? "CHECK REQUIRED"
+    : "PRELIMINARY REVIEW";
+
   res.json({
     status,
     matched,
@@ -62,7 +97,9 @@ app.post("/api/check", (req, res) => {
 });
 
 app.post("/api/inspect", upload.single("photo"), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: "No photo uploaded" });
+  if (!req.file) {
+    return res.status(400).json({ error: "No photo uploaded" });
+  }
 
   if (!client) {
     return res.json({
@@ -95,6 +132,7 @@ app.post("/api/inspect", upload.single("photo"), async (req, res) => {
 
   try {
     const b64 = req.file.buffer.toString("base64");
+
     const response = await client.responses.create({
       model: process.env.OPENAI_MODEL || "gpt-5",
       input: [{
@@ -104,16 +142,31 @@ app.post("/api/inspect", upload.single("photo"), async (req, res) => {
             type: "input_text",
             text: `Inspect this packaging photo as a preliminary packaging-compliance assistant. Return JSON only with keys: packaging_type, likely_material, material_confidence, food_contact_likelihood, visible_text, visible_symbols, possible_issues, missing_information, cannot_determine, confidence. Do not claim legal compliance. Never infer exact polymer composition, migration compliance, certification validity, or legal responsibility from appearance alone.`
           },
-          { type: "input_image", image_url: `data:${req.file.mimetype};base64,${b64}` }
+          {
+            type: "input_image",
+            image_url: `data:${req.file.mimetype};base64,${b64}`
+          }
         ]
       }]
     });
+
     let parsed;
-    try { parsed = JSON.parse(response.output_text || "{}"); }
-    catch { parsed = { raw: response.output_text || "" }; }
-    res.json({ mode: "live", inspection: parsed });
+
+    try {
+      parsed = JSON.parse(response.output_text || "{}");
+    } catch {
+      parsed = { raw: response.output_text || "" };
+    }
+
+    res.json({
+      mode: "live",
+      inspection: parsed
+    });
+
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({
+      error: e.message
+    });
   }
 });
 
